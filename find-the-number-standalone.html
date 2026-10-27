@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Find the Number</title>
+<style>
+:root{--bg:#faf7f2;--card:#fff;--ink:#222;--mut:#7a7468;--me:#2563eb;--you:#e11d48;--line:#d8d2c6;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16161a;--card:#202026;--ink:#eee;--mut:#9a9aa5;--me:#6ea0ff;--you:#ff6b8b;--line:#3a3a44}}
+:root[data-theme="dark"]{--bg:#16161a;--card:#202026;--ink:#eee;--mut:#9a9aa5;--me:#6ea0ff;--you:#ff6b8b;--line:#3a3a44}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+body{max-width:980px;margin:0 auto;padding:12px}
+h1{font-size:20px;margin:4px 0 10px;text-align:center}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+#lobby{max-width:380px;margin:30px auto;display:flex;flex-direction:column;gap:10px}
+input,button{font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button{cursor:pointer;background:var(--me);color:#fff;border:0;font-weight:600}
+.mut{color:var(--mut);font-size:13px}
+#game{display:none}
+#status{text-align:center;font-size:18px;font-weight:600;min-height:28px;margin:6px 0}
+#status.bad{color:var(--you)}
+.bars{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;font-size:13px}
+.bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:3px}
+.bar i{display:block;height:100%;width:0;transition:width .15s}
+.board{display:grid;grid-template-columns:1fr 1.35fr 1fr;gap:10px;align-items:start}
+.g{display:grid;grid-template-columns:repeat(7,1fr);border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--card)}
+.g.mine{outline:2px solid var(--me);cursor:pointer}
+.c{aspect-ratio:1;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:clamp(12px,3vw,24px);font-weight:700;user-select:none}
+.mine .c.on{color:var(--me)}.theirs .c.on{color:var(--you)}
+.field{position:relative;aspect-ratio:3/4;border:1px dashed var(--line);border-radius:10px;overflow:hidden;background:var(--card)}
+.n{position:absolute;transform:translate(-50%,-50%);padding:2px 5px;border-radius:50%;cursor:pointer;user-select:none;line-height:1;font-weight:600;border:2px solid transparent}
+.n.used{opacity:.5;cursor:default}
+.n.u0{border-color:var(--me)}.n.u1{border-color:var(--you)}
+.n.cur{background:#fde047;color:#222;opacity:1;box-shadow:0 0 0 3px #f59e0b}
+.n.shake{animation:sh .25s}
+@keyframes sh{25%{margin-left:-5px}75%{margin-left:5px}}
+#over{display:none;position:fixed;inset:0;background:#000a;align-items:center;justify-content:center;z-index:5}
+#over .card{text-align:center;display:flex;flex-direction:column;gap:12px;font-size:22px}
+@media (max-width:700px){.board{grid-template-columns:1fr 1fr}.field{grid-column:1/-1;order:-1;aspect-ratio:1/1}}
+</style></head><body>
+<h1>🔢 Find the Number</h1>
+
+<div id="lobby" class="card">
+  <div class="mut">Both of you open this page and enter the same room code. No account needed.</div>
+  <input id="name" placeholder="Your name" maxlength="16">
+  <input id="code" placeholder="Room code (e.g. love42)" maxlength="16">
+  <button id="go">Join game</button>
+  <div id="err" class="mut"></div>
+</div>
+
+<div id="game">
+  <div id="status">Connecting…</div>
+  <div class="bars">
+    <div><span id="meName">You</span> · <span id="meCount">0</span>/70<div class="bar"><i id="meBar" style="background:var(--me)"></i></div></div>
+    <div style="text-align:right"><span id="opName">Partner</span> · <span id="opCount">0</span>/70<div class="bar"><i id="opBar" style="background:var(--you);margin-left:auto"></i></div></div>
+  </div>
+  <div class="board">
+    <div id="mine" class="g mine"></div>
+    <div id="field" class="field"></div>
+    <div id="theirs" class="g theirs"></div>
+  </div>
+  <p class="mut" style="text-align:center">Caller: tap a number to call it, then tap your grid (or press Space) to keep marking. Finder: spot the number and tap it to stop them!</p>
+</div>
+
+<div id="over"><div class="card"><div id="overMsg"></div><button id="again">Play again</button></div></div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const TOTAL=70;
+let room=null,localM=0,lock=-1,fieldKey='',curState=null;
+try{$('#name').value=localStorage.getItem('ftn_name')||'';$('#code').value=localStorage.getItem('ftn_code')||''}catch(e){}
+
+function rng(seed){let a=seed>>>0;return()=>{a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function hash(s){let h=2166136261;for(const c of s){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
+function layout(seed){
+  const r=rng(seed),vals=[...Array(100).keys()];
+  for(let i=99;i>0;i--){const j=Math.floor(r()*(i+1));[vals[i],vals[j]]=[vals[j],vals[i]]}
+  const out=[];
+  for(const v of vals.slice(0,44)){
+    let p=null;
+    for(let k=0;k<40&&!p;k++){const x=8+r()*84,y=6+r()*88;if(out.every(o=>Math.hypot(o.x-x,(o.y-y)*1.3)>9))p={x,y}}
+    if(!p)p={x:8+r()*84,y:6+r()*88};
+    out.push({v,x:p.x,y:p.y,s:16+Math.floor(r()*14),rot:Math.floor(r()*50-25)});
+  }
+  return out;
+}
+function buildGrid(el){el.innerHTML='';for(let i=0;i<TOTAL;i++){const d=document.createElement('div');d.className='c';d.textContent=['/','|','\\'][(i*7+3)%3];el.appendChild(d)}}
+buildGrid($('#mine'));buildGrid($('#theirs'));
+function paint(el,m){[...el.children].forEach((c,i)=>c.classList.toggle('on',i<m));[...el.children].forEach((c,i)=>c.style.color=i<m?'':'transparent')}
+
+// ---- PeerJS networking: a tiny shim that mimics a shared "presence" room ----
+const ls=[];let opObj=null,conn=null,tick=0,netErr='';
+const meObj={isMe:true,sameTab:true,kind:'viewer',peer:'me',presence:{}};
+function emit(){if(tick)return;tick=setTimeout(()=>{tick=0;ls.forEach(f=>f())},0)}
+room={
+  presence(patch){Object.assign(meObj.presence,patch);if(conn&&conn.open)conn.send({p:meObj.presence});emit();return Promise.resolve()},
+  peers(){return opObj?[meObj,opObj]:[meObj]},
+  onPeers(f){ls.push(f)}
+};
+function wire(c){
+  c.on('open',()=>{
+    if(conn&&conn.open&&conn!==c){c.close();return}
+    conn=c;netErr='';
+    opObj={isMe:false,sameTab:false,kind:'viewer',peer:'op',presence:{}};
+    c.send({p:meObj.presence});emit();
+  });
+  c.on('data',d=>{if(c!==conn||!d||!d.p)return;opObj.presence=d.p;emit()});
+  c.on('close',()=>{if(c===conn){conn=null;opObj=null;emit()}});
+}
+function startNet(code,onHostId){
+  const id='ftn-'+code;
+  const host=new Peer(id);
+  host.on('open',()=>{onHostId(1);host.on('connection',wire)});
+  host.on('error',e=>{
+    if(e.type==='unavailable-id'){
+      host.destroy();
+      const guest=new Peer();
+      guest.on('open',()=>{onHostId(2);wire(guest.connect(id,{reliable:true}))});
+      guest.on('error',e2=>{netErr='Couldn’t reach the room ('+e2.type+'). Wait a few seconds and reload.';emit()});
+    }else{netErr='Connection problem: '+e.type;emit()}
+  });
+}
+$('#go').onclick=()=>{
+  const name=$('#name').value.trim()||'Player';
+  const code=$('#code').value.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
+  if(!code){$('#err').textContent='Please enter a room code.';return}
+  if(typeof Peer==='undefined'){$('#err').textContent='Couldn’t load PeerJS. Check your connection.';return}
+  try{localStorage.setItem('ftn_name',name);localStorage.setItem('ftn_code',code)}catch(e){}
+  $('#lobby').style.display='none';$('#game').style.display='block';
+  room.onPeers(render);
+  $('#status').textContent='Connecting…';
+  startNet(code,order=>{
+    room.presence({j:order,n:name,g:0,m:0,fc:0,c:-1,cr:-1,u:[]});
+  });
+};
+
+function players(){
+  return room.peers().filter(p=>p.kind==='viewer'&&p.presence&&p.presence.j)
+    .sort((a,b)=>a.presence.j-b.presence.j||(a.peer<b.peer?-1:1)).slice(0,2);
+}
+const isMe=p=>p.isMe&&p.sameTab;
+
+function render(){
+  if(!room)return;
+  const ps=players(),me=ps.find(isMe),op=ps.find(p=>!isMe(p));
+  const st=$('#status');st.className='';
+  if(!me){st.textContent='Joining…';return}
+  const mp=me.presence;
+  const maxg=Math.max(...ps.map(p=>p.presence.g||0));
+  if((mp.g||0)<maxg){localM=0;lock=-1;room.presence({g:maxg,m:0,fc:0,c:-1,cr:-1,u:[]});return}
+  localM=Math.max(localM,mp.m||0);if((mp.m||0)===0&&maxg!==(curState&&curState.g))localM=0;
+  $('#meName').textContent=mp.n||'You';
+  $('#meCount').textContent=mp.m||0;$('#meBar').style.width=((mp.m||0)/TOTAL*100)+'%';
+  paint($('#mine'),mp.m||0);
+  const used0=mp.u||[];
+  if(!op){
+    st.textContent=netErr||'Waiting for your partner… share the room code';
+    curState={g:maxg};drawField(maxg,[],used0,-1);return;
+  }
+  const o=op.presence;
+  $('#opName').textContent=o.n||'Partner';
+  $('#opCount').textContent=o.m||0;$('#opBar').style.width=((o.m||0)/TOTAL*100)+'%';
+  paint($('#theirs'),o.m||0);
+  const R=(mp.fc||0)+(o.fc||0);
+  const caller=ps[R%2],iCall=isMe(caller);
+  const cp=caller.presence,active=cp.c>=0&&cp.cr===R;
+  const cur=active?cp.c:-1;
+  const mineU=mp.u||[],theirU=o.u||[];
+  curState={g:maxg,R,iCall,active,cur,me:mp,mineU,theirU};
+  drawField(maxg,mineU,theirU,cur,iCall);
+  const winner=ps.find(p=>(p.presence.m||0)>=TOTAL);
+  if(winner){
+    $('#over').style.display='flex';
+    $('#overMsg').textContent=isMe(winner)?'🎉 You win!':'💖 '+(winner.presence.n||'Partner')+' wins!';
+    st.textContent='Game over';return;
+  }
+  $('#over').style.display='none';
+  if(iCall&&!active)st.textContent='Your turn: tap a number to call it';
+  else if(iCall)st.innerHTML='Calling <b>'+cur+'</b>: keep marking your grid!';
+  else if(!active)st.textContent=(cp.n||'Partner')+' is choosing a number…';
+  else st.innerHTML='Find <b>'+cur+'</b> and tap it!';
+}
+
+function drawField(g,mineU,theirU,cur,iCall){
+  const f=$('#field'),code=$('#code').value.trim().toLowerCase().replace(/[^a-z0-9]/g,''),key=code+':'+g;
+  if(fieldKey!==key){
+    fieldKey=key;f.innerHTML='';
+    layout(hash(key)).forEach(o=>{
+      const d=document.createElement('div');d.className='n';d.dataset.v=o.v;d.textContent=o.v;
+      d.style.cssText='left:'+o.x+'%;top:'+o.y+'%;font-size:'+o.s+'px;transform:translate(-50%,-50%) rotate('+o.rot+'deg)';
+      d.onclick=()=>pick(o.v,d);f.appendChild(d);
+    });
+  }
+  [...f.children].forEach(d=>{
+    const v=+d.dataset.v,hide=v===cur&&!iCall;
+    const a=!hide&&mineU.includes(v),b=!hide&&theirU.includes(v);
+    d.className='n'+((a||b)?' used '+(a?'u0':'u1'):'')+(v===cur&&iCall?' cur':'');
+  });
+}
+
+function pick(v,el){
+  const s=curState;if(!s||!room||s.cur===undefined)return;
+  if(s.iCall){
+    if(!s.active&&!s.mineU.includes(v)&&!s.theirU.includes(v)){
+      room.presence({c:v,cr:s.R,u:[...s.mineU,v]});
+    }
+  }else if(s.active){
+    if(lock===s.R)return;
+    if(v===s.cur){lock=s.R;room.presence({fc:(s.me.fc||0)+1})}
+    else{el.classList.remove('shake');void el.offsetWidth;el.classList.add('shake');
+      const st=$('#status');st.className='bad';st.textContent='Not that one, keep looking!'}
+  }
+}
+
+function mark(){
+  const s=curState;if(!s||!room||!s.iCall||!s.active)return;
+  if(localM>=TOTAL)return;
+  localM++;room.presence({m:localM});
+  paint($('#mine'),localM);$('#meCount').textContent=localM;$('#meBar').style.width=(localM/TOTAL*100)+'%';
+}
+$('#mine').onclick=mark;
+document.addEventListener('keydown',e=>{if(e.code==='Space'&&$('#game').style.display==='block'){e.preventDefault();mark()}});
+
+$('#again').onclick=()=>{
+  const s=curState;if(!s)return;
+  localM=0;lock=-1;$('#over').style.display='none';
+  room.presence({g:s.g+1,m:0,fc:0,c:-1,cr:-1,u:[]});
+};
+</script>
+</body></html>
